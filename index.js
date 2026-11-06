@@ -198,11 +198,14 @@ function artistOf(mid, name) {
   return { id, name: n || t("Unknown uploader") };
 }
 
-// A track. id is "BV…" for a video's first part, or "BV…|cid" for one part.
+// A track. Its id is "BV…" for a video, which plays its first part, and
+// "BV…|cid" for any later part, so that a video has one id wherever it's found:
+// in search, history, favorites or recommendations. 0.1's "BV…|cid" for a first
+// part still plays.
 function track({ bvid, cid, title, part, page, pages, pic, mid, author, duration, albumName }) {
   const name = pages > 1 && part ? `P${page} ${clean(part)}` : clean(title);
   return {
-    id: cid ? `${bvid}|${cid}` : bvid,
+    id: cid && page > 1 ? `${bvid}|${cid}` : bvid,
     name: name || bvid,
     artists: [artistOf(mid, author)],
     album: { id: bvid, name: clean(albumName ?? title), imageUrl: image(pic), artists: [artistOf(mid, author)] },
@@ -379,7 +382,33 @@ async function takeSession(address, fromHeaders) {
 let signingIn = 0;
 const passport = "https://passport.bilibili.com";
 
+// Signing in is on Bilibili's own page, in a window of the app, which offers
+// all its ways in: the QR code for the Bilibili app, a text message, or a
+// password. It's done once the session's cookies are there.
+async function signInOnPage() {
+  const { cookie } = await host.webSignIn({
+    url: "https://passport.bilibili.com/login",
+    cookiesOf: `${API}/`,
+    until: ["SESSDATA", "bili_jct"],
+    userAgent: UA,
+  });
+  const found = {};
+  for (const part of String(cookie || "").split(";")) {
+    const at = part.indexOf("=");
+    if (at > 0) found[part.slice(0, at).trim()] = part.slice(at + 1).trim();
+  }
+  return takeSession("", found);
+}
+
 export async function signIn() {
+  signingIn++;
+  if (typeof host.webSignIn === "function") return signInOnPage();
+  return signInWithQR();
+}
+
+// The QR code alone, in the app's own sign-in prompt, for an app too old to
+// show a page.
+async function signInWithQR() {
   const mine = ++signingIn;
   host.signInPrompt({ text: t("Getting a QR code from Bilibili…") });
   const gen = await get("/x/passport-login/web/qrcode/generate", {}, { base: passport });
@@ -415,6 +444,48 @@ export function signOut() {
 
 const pageSize = 20;
 
+// The app asks for more from how many it already has, while Bilibili counts
+// in pages of twenty, some of which the plugin leaves out (courses, live rooms,
+// a video already given). So each search remembers which page comes next after
+// how many it gave, and what it gave, to give no video twice: the app keys its
+// cards by id, and a card that's there twice can't be clicked.
+const searches = new Map();
+
+function searchState(kind, q, offset) {
+  const key = `${kind}\n${q}`;
+  let s = searches.get(key);
+  if (!s || offset === 0) {
+    s = { next: new Map([[0, 1]]), seen: new Set() };
+    searches.delete(key);
+    searches.set(key, s);
+    while (searches.size > 30) searches.delete(searches.keys().next().value);
+  }
+  return s;
+}
+
+// Results from offset on: a page of Bilibili's, or the next ones too when all
+// of one was left out, so that "more" never comes with nothing.
+async function searchPages(kind, q, offset, type, keep) {
+  const s = searchState(kind, q, offset);
+  let page = s.next.get(offset) ?? Math.floor(offset / pageSize) + 1;
+  const out = [];
+  let more = false;
+  for (let tries = 0; tries < 3; tries++) {
+    const d = await get("/x/web-interface/wbi/search/type", { search_type: type, keyword: q, page, page_size: pageSize }, { wbi: true });
+    for (const r of d.result || []) {
+      const id = keep(r);
+      if (!id || s.seen.has(id)) continue;
+      s.seen.add(id);
+      out.push(r);
+    }
+    more = page < (d.numPages || 0);
+    page++;
+    if (out.length || !more) break;
+  }
+  s.next.set(offset + out.length, page);
+  return { found: out, more: more && out.length > 0 };
+}
+
 export async function search({ query: q, kind, offset }) {
   const link = await pasted(q);
   if (link) {
@@ -424,11 +495,8 @@ export async function search({ query: q, kind, offset }) {
     if (link.page > 1 && link.page <= tracks.length) tracks.unshift(...tracks.splice(link.page - 1, 1));
     return { tracks, more: false };
   }
-  const page = Math.floor(offset / pageSize) + 1;
   if (kind === "tracks" || kind === "albums") {
-    const d = await get("/x/web-interface/wbi/search/type", { search_type: "video", keyword: q, page, page_size: pageSize }, { wbi: true });
-    const found = (d.result || []).filter((r) => r.bvid);
-    const more = page < (d.numPages || 0);
+    const { found, more } = await searchPages(kind, q, offset, "video", (r) => r.bvid);
     if (kind === "albums") {
       // A video is an album of its parts: opening one lists them.
       return {
@@ -442,11 +510,16 @@ export async function search({ query: q, kind, offset }) {
     };
   }
   if (kind === "artists") {
-    const d = await get("/x/web-interface/wbi/search/type", { search_type: "bili_user", keyword: q, page, page_size: pageSize }, { wbi: true });
-    return {
-      artists: (d.result || []).map((u) => ({ id: String(u.mid), name: clean(u.uname), imageUrl: image(u.upic, 240) })),
-      more: page < (d.numPages || 0),
-    };
+    const { found, more } = await searchPages(kind, q, offset, "bili_user", (u) => u.mid && String(u.mid));
+    return { artists: found.map((u) => ({ id: String(u.mid), name: clean(u.uname), imageUrl: image(u.upic, 240) })), more };
+  }
+  if (kind === "playlists") {
+    // Bilibili has no search for playlists. The nearest thing is your own
+    // favorites folders, and the collections you saved, by name.
+    if (!signedIn() || offset > 0) return { playlists: [], more: false };
+    const needle = q.trim().toLowerCase();
+    const mine = await playlists();
+    return { playlists: mine.filter((pl) => pl.name.toLowerCase().includes(needle)), more: false };
   }
   return { [kind]: [], more: false };
 }
@@ -464,26 +537,76 @@ export async function suggest({ query: q }) {
 // ---------------------------------------------------------------------------
 // Charts and Home.
 
-const regions = [
-  { rid: 3, name: "Music" },
-  { rid: 28, name: "Original Music" },
-  { rid: 31, name: "Covers" },
-  { rid: 59, name: "Performance" },
-  { rid: 30, name: "VOCALOID·UTAU" },
-  { rid: 193, name: "MV" },
-  { rid: 29, name: "Live" },
-  { rid: 130, name: "Music Variety" },
-];
+// Bilibili moved to new categories in 2025, and the rankings of the old ones
+// stopped then. Music is 1003 among the new ones, whose own subcategories have
+// no ranking of their own.
+const musicRegion = 1003;
 const musicTids = new Set([3, 28, 29, 30, 31, 59, 130, 193, 194, 243, 244, 265, 266, 267]);
 
-async function regionRank(rid) {
-  const list = await get("/x/web-interface/ranking/region", { rid, day: 7 });
-  return (list || []).map((v) =>
-    track({ bvid: v.bvid, title: v.title, pic: v.pic, mid: v.mid, author: v.author, duration: v.duration }),
-  );
+const videoTrack = (v) =>
+  track({
+    bvid: v.bvid,
+    cid: v.videos > 1 ? undefined : v.cid,
+    title: v.title,
+    pic: v.pic || v.cover,
+    mid: v.owner?.mid ?? v.author?.mid,
+    author: v.owner?.name ?? v.author?.name,
+    duration: v.duration,
+  });
+
+// The music category's ranking: what's done well there over the last few days.
+async function musicRank() {
+  const d = await get("/x/web-interface/ranking/v2", { rid: musicRegion, type: "all" });
+  return (d.list || []).filter((v) => v.bvid).map(videoTrack);
 }
 
-// The weekly Bilibili music chart, of songs rather than videos.
+// What's new in the music category, a different mix each time it's asked. It
+// gives twenty at most per request; pages > 1 asks again and keeps the new ones.
+async function musicFresh(pages = 1) {
+  const seen = new Set();
+  const out = [];
+  for (let i = 1; i <= pages; i++) {
+    const d = await get("/x/web-interface/region/feed/rcmd", { display_id: i, request_cnt: 20, from_region: musicRegion });
+    for (const v of d.archives || []) {
+      if (!v.bvid || (v.goto && v.goto !== "av") || seen.has(v.bvid)) continue;
+      seen.add(v.bvid);
+      out.push(videoTrack(v));
+    }
+  }
+  return out;
+}
+
+// Beyond music: the whole site's ranking, what's popular now, and the
+// classics Bilibili tells newcomers to see. (Its weekly picks turn away a
+// visitor, and its original and newcomer rankings stopped in 2025.)
+async function siteRank() {
+  const d = await get("/x/web-interface/ranking/v2", { rid: 0, type: "all" });
+  return (d.list || []).filter((v) => v.bvid).map(videoTrack);
+}
+
+async function popular(pages = 1) {
+  const out = [];
+  const seen = new Set();
+  for (let pn = 1; pn <= pages; pn++) {
+    const d = await get("/x/web-interface/popular", { ps: 50, pn });
+    for (const v of d.list || []) {
+      if (!v.bvid || seen.has(v.bvid)) continue;
+      seen.add(v.bvid);
+      out.push(videoTrack(v));
+    }
+    if (d.no_more) break;
+  }
+  return out;
+}
+
+async function classics() {
+  const d = await get("/x/web-interface/popular/precious", { page_size: 100, page: 1 });
+  return (d.list || []).filter((v) => v.bvid).map(videoTrack);
+}
+
+// The weekly Bilibili music chart. Each entry is a song, but the chart plays
+// it through a video someone uploaded with it, which is what's shown: the
+// video as its uploader titled it.
 async function musicChart() {
   const periods = await get("/x/copyright-music-publicity/toplist/all_period", { list_type: 1 });
   let latest = null;
@@ -494,23 +617,18 @@ async function musicChart() {
   const d = await get("/x/copyright-music-publicity/toplist/music_list", { list_id: latest.ID });
   const tracks = (d.list || [])
     .filter((s) => s.creation_bvid)
-    .map((s) => {
-      const tr = track({
+    .map((s) =>
+      track({
         bvid: s.creation_bvid,
-        title: s.song_name || s.creation_title,
+        title: s.creation_title,
         pic: s.creation_cover,
         mid: s.creation_up,
-        author: s.singer || s.creation_nickname,
+        author: s.creation_nickname,
         duration: s.creation_duration || 0,
-        albumName: s.creation_title,
-      });
-      return tr;
-    });
+      }),
+    );
   return { tracks, period: latest.priod };
 }
-
-const regionLinks = () =>
-  regions.map((r) => ({ title: t(r.name), subtitle: t("Top videos of the past week"), page: `rank:${r.rid}` }));
 
 async function recommended() {
   const d = await get(
@@ -528,29 +646,48 @@ async function recommended() {
 const settle = (p) => p.then((v) => v, (e) => (console.warn(e.message), null));
 
 export async function home() {
-  const [chart, rank, rcmd] = await Promise.all([
+  const [chart, rank, fresh, rcmd] = await Promise.all([
     settle(musicChart()),
-    settle(regionRank(3)),
+    settle(musicRank()),
+    settle(musicFresh()),
     signedIn() ? settle(recommended()) : null,
   ]);
   const sections = [];
   if (rcmd?.length) sections.push({ title: t("Recommended for you"), tracks: rcmd.slice(0, 12) });
   if (chart?.tracks.length) sections.push({ title: t("Bilibili Music Chart"), tracks: chart.tracks.slice(0, 12), morePage: "chart" });
-  if (rank?.length) sections.push({ title: t("Trending in Music"), tracks: rank.slice(0, 12), morePage: "rank:3" });
-  sections.push({ title: t("Charts by category"), links: regionLinks() });
-  if (sections.length === 1) throw new Error(t("Bilibili didn't answer: try again later"));
+  if (rank?.length) sections.push({ title: t("Trending in Music"), tracks: rank.slice(0, 12), morePage: "rank" });
+  if (fresh?.length) sections.push({ title: t("New in Music"), tracks: fresh.slice(0, 12), morePage: "fresh" });
+  if (!sections.length) throw new Error(t("Bilibili didn't answer: try again later"));
   return { title: t("Home"), sections };
 }
 
 export async function browse({ page }) {
   if (page === "charts") {
-    const chart = await settle(musicChart());
+    const [chart, rank, site, hot, picks] = await Promise.all([
+      settle(musicChart()),
+      settle(musicRank()),
+      settle(siteRank()),
+      settle(popular()),
+      settle(classics()),
+    ]);
     const sections = [];
-    if (chart?.tracks.length) {
-      sections.push({ title: t("Bilibili Music Chart"), tracks: chart.tracks.slice(0, 10), morePage: "chart" });
-    }
-    sections.push({ title: t("Charts by category"), links: regionLinks() });
+    const add = (title, tracks, morePage) => tracks?.length && sections.push({ title, tracks: tracks.slice(0, 10), morePage });
+    add(t("Bilibili Music Chart"), chart?.tracks, "chart");
+    add(t("Trending in Music"), rank, "rank");
+    add(t("Bilibili Ranking"), site, "site");
+    add(t("Popular Now"), hot, "popular");
+    add(t("Must-See Classics"), picks, "classics");
+    if (!sections.length) throw new Error(t("Bilibili didn't answer: try again later"));
     return { title: t("Charts"), sections };
+  }
+  if (page === "site") {
+    return { title: t("Bilibili Ranking"), subtitle: t("The whole site's top videos lately"), sections: [{ tracks: await siteRank() }] };
+  }
+  if (page === "popular") {
+    return { title: t("Popular Now"), subtitle: t("What everyone's watching right now"), sections: [{ tracks: await popular(2) }] };
+  }
+  if (page === "classics") {
+    return { title: t("Must-See Classics"), subtitle: t("Bilibili's picks for newcomers"), sections: [{ tracks: await classics() }] };
   }
   if (page === "chart") {
     const chart = await musicChart();
@@ -560,14 +697,12 @@ export async function browse({ page }) {
       sections: [{ tracks: chart.tracks }],
     };
   }
-  const rank = page.match(/^rank:(\d+)$/);
-  if (rank) {
-    const r = regions.find((x) => x.rid === +rank[1]);
-    return {
-      title: r ? t(r.name) : t("Charts"),
-      subtitle: t("Top videos of the past week"),
-      sections: [{ tracks: await regionRank(+rank[1]) }],
-    };
+  // rank:<rid> was 0.1's address for the old categories' rankings.
+  if (page === "rank" || /^rank:\d+$/.test(page)) {
+    return { title: t("Trending in Music"), subtitle: t("What's done well in the music category lately"), sections: [{ tracks: await musicRank() }] };
+  }
+  if (page === "fresh") {
+    return { title: t("New in Music"), subtitle: t("Different each time you look"), sections: [{ tracks: await musicFresh(2) }] };
   }
   throw fail("unavailable", t("no such page"));
 }
@@ -914,24 +1049,51 @@ export async function postComment({ trackId, text }) {
 }
 
 // ---------------------------------------------------------------------------
-// Lyrics: a video's subtitles, the uploader's own over Bilibili's AI ones.
+// Lyrics: a video's own subtitles, when it has them as a track rather than
+// burned into the picture. The uploader's over Bilibili's AI ones, Chinese
+// first; with subtitles in another language too, the other language is the
+// lyric and the Chinese its translation, line by line as their times match.
 
-export async function lyrics({ id }) {
-  const { bvid, cid } = await locate(id);
-  const d = await get("/x/player/wbi/v2", { bvid, cid }, { wbi: true });
-  const subs = (d.subtitle?.subtitles || []).filter((s) => s.subtitle_url);
-  const rank = (s) => (s.lan?.startsWith("ai-") ? 2 : 0) + (/zh/.test(s.lan) ? 0 : 1);
-  subs.sort((a, b) => rank(a) - rank(b));
-  if (!subs.length) throw fail("unavailable", t("This video has no subtitles"));
-  let url = subs[0].subtitle_url;
+const isAI = (s) => /^ai-/.test(s.lan || "");
+const isChinese = (s) => /zh/.test(s.lan || "");
+
+async function subtitleLines(sub) {
+  let url = sub.subtitle_url;
   if (url.startsWith("//")) url = `https:${url}`;
   const res = await fetch(url.replace(/^http:/, "https:"), { headers: { "User-Agent": UA, Referer: REFERER } });
   const body = await res.json();
-  const lines = (body.body || []).map((l) => ({
-    start: Math.round(l.from * 1000),
-    end: Math.round(l.to * 1000),
-    text: clean(l.content),
-  }));
+  return (body.body || [])
+    .map((l) => ({
+      start: Math.round(l.from * 1000),
+      end: Math.round(l.to * 1000),
+      // AI subtitles mark what's sung with ♪, and an instrumental stretch as
+      // "♪ 音乐 ♪" or the like, which says nothing.
+      text: clean(l.content).replace(/[♪♫♬]/g, "").replace(/\s+/g, " ").trim(),
+    }))
+    .filter((l) => l.text && !/^[(（\[【]?(音乐|纯音乐|music|instrumental)[)）\]】]?$/i.test(l.text));
+}
+
+export async function lyrics({ id }) {
+  const { bvid, cid, aid } = await locate(id);
+  const d = await get("/x/player/wbi/v2", { aid, bvid, cid }, { wbi: true });
+  const subs = (d.subtitle?.subtitles || []).filter((s) => s.subtitle_url);
+  const rank = (s) => (isAI(s) ? 2 : 0) + (isChinese(s) ? 0 : 1);
+  subs.sort((a, b) => rank(a) - rank(b));
+  if (!subs.length) throw fail("unavailable", t("This video has no subtitles"));
+
+  const chinese = subs.find((s) => !isAI(s) && isChinese(s));
+  const other = subs.find((s) => !isAI(s) && !isChinese(s));
+  if (chinese && other) {
+    const [lines, zh] = await Promise.all([subtitleLines(other), subtitleLines(chinese)]);
+    if (lines.length) {
+      for (const l of lines) {
+        const match = zh.find((z) => Math.abs(z.start - l.start) <= 400);
+        if (match && match.text !== l.text) l.translation = match.text;
+      }
+      return { lines };
+    }
+  }
+  const lines = await subtitleLines(subs[0]);
   if (!lines.length) throw fail("unavailable", t("This video has no subtitles"));
   return { lines };
 }

@@ -1,7 +1,7 @@
 {
   "id": "bilibili",
   "name": "Bilibili",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "minAppVersion": "0.1.8",
   "main": "index.js",
   "playback": "stream",
@@ -21,9 +21,20 @@
     ]
   },
   "navigation": [
-    { "builtin": "home" },
-    { "title": "Charts", "page": "charts", "icon": "chart" },
-    { "title": "Favorites", "builtin": "liked" },
-    { "builtin": "stations" }
+    {
+      "builtin": "home"
+    },
+    {
+      "title": "Charts",
+      "page": "charts",
+      "icon": "chart"
+    },
+    {
+      "title": "Favorites",
+      "builtin": "liked"
+    },
+    {
+      "builtin": "stations"
+    }
   ]
 }

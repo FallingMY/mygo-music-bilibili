@@ -9,7 +9,7 @@ import { spawn } from "node:child_process";
 
 const dir = new URL("..", import.meta.url).pathname;
 
-export async function load({ storage = new Map(), onPrompt = () => {}, fetch: fetchImpl = fetch } = {}) {
+export async function load({ storage = new Map(), onPrompt = () => {}, fetch: fetchImpl = fetch, settings = {}, webSignIn, main } = {}) {
   const locale = JSON.parse(await readFile(join(dir, "locales/zh-CN.json"), "utf8").catch(() => "{}"));
   const host = {
     platform: process.platform,
@@ -21,7 +21,8 @@ export async function load({ storage = new Map(), onPrompt = () => {}, fetch: fe
       set: (k, v) => void storage.set(k, structuredClone(v)),
       remove: (k) => void storage.delete(k),
     },
-    setting: () => "",
+    setting: (key) => settings[key] ?? "",
+    ...(webSignIn ? { webSignIn } : {}),
     t: (text) => locale[text] ?? text,
     language: () => "zh-CN",
     crypto: { md5: (s) => createHash("md5").update(s).digest("hex") },
@@ -66,7 +67,7 @@ export async function load({ storage = new Map(), onPrompt = () => {}, fetch: fe
       };
     },
   };
-  const source = await readFile(join(dir, "index.js"), "utf8");
+  const source = await readFile(main || join(dir, "index.js"), "utf8");
   const mod = new SourceTextModule(source, {
     identifier: "index.js",
     context: createContext({ URL, URLSearchParams, TextEncoder, TextDecoder, fetch: fetchImpl, setTimeout, clearTimeout, console, host, structuredClone }),

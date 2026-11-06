@@ -1,6 +1,7 @@
-// Signing in, offline, against a stand-in Bilibili that confirms the QR code on
-// the second poll and knows the session only by SESSDATA kept encoded. It hands
-// the session out either in the address it answers or as Set-Cookie headers.
+// Signing in, offline. On Bilibili's page in the app's window first; then, as an
+// app without that window does, by the QR code alone, against a stand-in
+// Bilibili that confirms it on the second poll and knows the session only by
+// SESSDATA kept encoded, handed out in the address it answers or as Set-Cookie.
 // node --experimental-vm-modules tests/signin.mjs
 import { load } from "./harness.mjs";
 
@@ -63,7 +64,36 @@ async function scenario(name, { inQuery, inHeaders }) {
   }
 }
 
-await scenario("session in the address", { inQuery: true });
-await scenario("session in Set-Cookie only", { inHeaders: true });
-await scenario("session in neither", {});
+await scenario("QR only: session in the address", { inQuery: true });
+await scenario("QR only: session in Set-Cookie only", { inHeaders: true });
+await scenario("QR only: session in neither", {});
+
+// Bilibili's page in the app's window: it answers the cookies once SESSDATA and bili_jct are there.
+{
+  let asked = null;
+  const fakeFetch = async (url, init = {}) => {
+    const u = new URL(url);
+    const json = (b) => new Response(JSON.stringify(b), { headers: { "content-type": "application/json" } });
+    if (u.pathname === "/x/frontend/finger/spi") return json({ code: 0, data: { b_3: "B3", b_4: "B4" } });
+    if (u.pathname === "/x/web-interface/nav") {
+      const ok = (init.headers?.Cookie || "").includes(`SESSDATA=${SESS}`);
+      return json(ok ? { code: 0, data: { isLogin: true, mid: 42, uname: "测试账号" } } : { code: -101, data: { isLogin: false } });
+    }
+    throw new Error(`unexpected ${url}`);
+  };
+  const { api, storage } = await load({
+    fetch: fakeFetch,
+    webSignIn: async (o) => ((asked = o), { cookie: `buvid3=X; SESSDATA=${SESS}; bili_jct=csrf123; DedeUserID=42; DedeUserID__ckMd5=abc; sid=s1` }),
+  });
+  const me = await api.signIn();
+  const kept = storage.get("cookie") || "";
+  const checks = [
+    ["page: opens Bilibili's sign-in page", asked?.url === "https://passport.bilibili.com/login"],
+    ["page: waits for SESSDATA and bili_jct", JSON.stringify(asked?.until) === '["SESSDATA","bili_jct"]'],
+    ["page: asks for cookies of a host the permission reaches", asked?.cookiesOf === "https://api.bilibili.com/"],
+    ["page: signed in", me?.id === "42"],
+    ["page: keeps the session only", kept.includes(`SESSDATA=${SESS}`) && kept.includes("bili_jct=csrf123") && !kept.includes("buvid3")],
+  ];
+  for (const [check, ok] of checks) { console.log(ok ? "PASS" : "FAIL", check); if (!ok) failed++; }
+}
 process.exit(failed ? 1 : 0);

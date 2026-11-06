@@ -22,21 +22,34 @@ await check("search artists", async () => (await api.search({ query: "周杰伦"
 await check("search albums", async () => (await api.search({ query: "晴天", kind: "albums", offset: 0 })).albums.length);
 await check("paste b23", async () => (await api.search({ query: "【哔哩哔哩】 https://b23.tv/BV1GJ411x7h7", kind: "tracks", offset: 0 })).tracks.map((t) => t.name));
 await check("multi-part video, pasted with ?p=3", async () => {
-  const { albums } = await api.search({ query: "周杰伦 歌曲合集 分P", kind: "albums", offset: 0 });
-  for (const a of albums.slice(0, 8)) {
-    const page = await api.album({ id: a.id });
-    if (page.tracks.length < 3 || !page.tracks[0].id.includes("|")) continue;
-    const { tracks } = await api.search({ query: `https://www.bilibili.com/video/${a.id}?p=3`, kind: "tracks", offset: 0 });
-    if (tracks[0].id !== page.tracks[2].id) throw new Error(`p=3 not first: ${tracks[0].name}`);
-    return [a.id, tracks.length, tracks[0].name];
-  }
-  throw new Error("no multi-part video among the results");
+  const id = "BV1q4FTeBEMj"; // a hundred parts
+  const page = await api.album({ id });
+  const { tracks } = await api.search({ query: `https://www.bilibili.com/video/${id}?p=3`, kind: "tracks", offset: 0 });
+  if (page.tracks[0].id !== id) throw new Error(`part 1 should be the plain id: ${page.tracks[0].id}`);
+  if (tracks[0].id !== page.tracks[2].id) throw new Error(`p=3 not first: ${tracks[0].name}`);
+  return [page.tracks.length, tracks[0].id, tracks[0].name];
 });
 await check("suggest", () => api.suggest({ query: "晴天" }));
 await check("home", async () => (await api.home()).sections.map((s) => [s.title, (s.tracks || s.links).length]));
-for (const page of ["charts", "chart", "rank:28"]) {
+for (const page of ["charts", "chart", "rank", "fresh", "rank:28", "site", "popular", "classics"]) {
   await check(`browse ${page}`, async () => (await api.browse({ page })).sections.map((s) => [s.title, (s.tracks || s.links).length, s.tracks?.[0]?.name]));
 }
+await check("rankings are current", async () => {
+  const { sections } = await api.browse({ page: "rank" });
+  const ids = sections[0].tracks.slice(0, 5).map((t) => t.album.id);
+  const dates = await Promise.all(ids.map(async (id) => (await api.album({ id })).album.released));
+  const newest = dates.sort().pop();
+  const days = (Date.now() - Date.parse(newest)) / 86400000;
+  if (days > 30) throw new Error(`newest of the top five is ${newest}`);
+  return { newest };
+});
+await check("one id per video", async () => {
+  const tracks = (await api.browse({ page: "fresh" })).sections[0].tracks;
+  const bad = tracks.filter((t) => t.id.includes("|"));
+  if (bad.length) throw new Error(`part ids for whole videos: ${bad.map((t) => t.id)}`);
+  return tracks.length;
+});
+await check("playlists search signed out is empty", async () => (await api.search({ query: "音乐", kind: "playlists", offset: 0 })).playlists.length === 0);
 const tr = r?.tracks[0];
 if (tr) {
   await check("album", async () => { const a = await api.album({ id: tr.album.id }); return [a.album.name, a.tracks.length]; });

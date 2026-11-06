@@ -14,13 +14,17 @@
 
 2. 安装插件：点这个链接 [mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili](mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili)，或在「设置 → 插件 → +」里粘贴 `https://github.com/GentleM4dman/mygo-music-bilibili`。
 3. 在「设置 → 插件」里允许哔哩哔哩启动程序。它只会启动 ffmpeg，位置限定为 PATH、`/opt/homebrew/bin` 或 `/usr/local/bin`。
+4. 登录：点登录会打开B站自己的登录页，可以用哔哩哔哩 App 扫码，也可以用短信验证码或密码，手机不在身边也能登。
 
 需要 MyGo Music 0.1.8 及以上。
 
 ## 能做什么
 
-- **不登录**：搜视频和 UP 主；在搜索框粘贴视频链接、b23.tv 短链、BV 号或 av 号（带 `?p=3` 时那一P排最前）；B站音乐榜（周榜）；音乐各分区近一周排行；多P视频当专辑，每P一首；单P视频属于合集时，专辑页列出整个合集；UP 主的投稿；评论第一页；「相关推荐」电台。
-- **扫码登录后**：默认收藏夹作为「喜欢」；其他收藏夹和收藏的合集作为歌单；往自己的收藏夹里加歌、删歌，新建和重命名收藏夹；历史记录；首页推荐和「首页推荐」电台；关注 UP 主；全部评论、点赞和发评论；有字幕的视频把字幕当歌词。
+插件保留B站原本的样子：曲名就是视频标题，「歌手」是 UP 主，「专辑」是一个视频的全部分P或它所属的合集，「歌单」是收藏夹。MyGo 的「歌曲 / 歌手 / 专辑 / 歌单」这些叫法是 App 定的，插件改不了。
+
+
+- **不登录**：搜视频和 UP 主；在搜索框粘贴视频链接、b23.tv 短链、BV 号或 av 号（带 `?p=3` 时那一P排最前）；B站音乐榜（周榜）；音乐区热门；音乐区新鲜投稿（每次打开都不一样）；排行榜页里还有全站排行榜、综合热门和入站必刷；多P视频当专辑，每P一首；单P视频属于合集时，专辑页列出整个合集；UP 主的投稿；评论第一页；「相关推荐」电台。
+- **登录后**：默认收藏夹作为「喜欢」；其他收藏夹和收藏的合集作为歌单，搜索的「歌单」标签会在这些收藏夹里按名字找；往自己的收藏夹里加歌、删歌，新建和重命名收藏夹；历史记录；首页推荐和「首页推荐」电台；关注 UP 主；全部评论、点赞和发评论；视频带有字幕轨时把字幕当歌词（UP 主上传的优先，其次是 B站 AI 字幕；同时有外语和中文字幕时，外语作歌词、中文作翻译）。烧在画面里的字幕提取不了。
 - **音质**：标准是 128 kbps MP3，高是 320 kbps MP3，都由 B站最高码率的 AAC（一般 192 kbps）转码而来。无损会播放 Hi-Res 稿件的 FLAC，需要大会员；拿不到时退回 320 kbps。
 
 ## 登录与隐私
@@ -30,8 +34,9 @@
 ## 开发
 
 ```bash
-npm test            # 离线测试扫码登录
+npm test            # 离线测试登录（网页登录和扫码）和字幕歌词
 npm run test:live   # 不登录，用真实的 B站接口把各功能跑一遍
+npm run test:signed-in  # 用 MyGo 里已保存的登录只读地试字幕歌词（只在本机读取，不打印、不写入）
 ```
 
 测试在 Node 22+ 里加载 `index.js`，用一个模拟的 `host` 代替 MyGo Music 提供的宿主对象。
@@ -44,9 +49,9 @@ Plays the audio of Bilibili videos in [MyGo Music](https://github.com/egoist/myg
 
 **Install** [ffmpeg](https://ffmpeg.org) first (`brew install ffmpeg`). Bilibili serves AAC (or FLAC for a few Hi-Res uploads) inside MP4, which MyGo Music doesn't decode, so ffmpeg converts it to MP3 as it plays. Then install with [mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili](mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili), and in Settings > Plugins allow Bilibili to start programs. It only starts ffmpeg, from the PATH, `/opt/homebrew/bin` or `/usr/local/bin`.
 
-**Signed out**: search videos and uploaders, paste links (`bilibili.com/video/…`, `b23.tv/…`, BV or av IDs), the weekly Bilibili Music Chart, weekly charts of the music categories, a video's parts (or its collection) as an album, uploaders' videos, the first page of comments, and a station of related videos.
+**Signed out**: search videos and uploaders, paste links (`bilibili.com/video/…`, `b23.tv/…`, BV or av IDs), the weekly Bilibili Music Chart, what's trending and what's new in the music category, and on the Charts page the whole site's ranking, what's popular now and Bilibili's must-see classics, a video's parts (or its collection) as an album, uploaders' videos, the first page of comments, and a station of related videos.
 
-**Signed in** (scan the QR code with the Bilibili app): your default favorites folder as Liked, other folders and saved collections as playlists, editing your own folders, history, recommendations, following uploaders, all comments, liking and posting comments, and subtitles as lyrics where a video has them.
+**Signed in** (on Bilibili's own sign-in page, in a window of the app: scan its QR code with the Bilibili app, or use a text message or password): your default favorites folder as Liked, other folders and saved collections as playlists (the Playlists search tab finds them by name), editing your own folders, history, recommendations, following uploaders, all comments, liking and posting comments, and a video's subtitle track as lyrics (the uploader's first, then Bilibili's AI ones; with a foreign-language and a Chinese track, the Chinese is shown as the translation). Subtitles burned into the picture can't be read.
 
 **Quality**: Standard is 128 kbps MP3 and High is 320 kbps MP3, both converted from Bilibili's best AAC. Lossless plays the FLAC of Hi-Res uploads (needs a premium account) and falls back to High.
 
