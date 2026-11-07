@@ -64,20 +64,23 @@ if (tr) {
   await check("stations", () => api.stations());
   api.played({ id: tr.id });
   await check("stationNext", async () => (await api.stationNext({ id: "related" })).map((t) => t.name));
-  for (const quality of ["high", "standard", "lossless"]) {
-    await check(`stream ${quality}`, async () => {
-      const start = Date.now();
-      const s = await api.stream({ id: tr.id, quality });
-      const ready = Date.now() - start;
-      const res = await fetch(s.url);
-      const buf = Buffer.from(await res.arrayBuffer());
-      const head = buf.subarray(0, 4).toString("hex");
-      const mp3 = buf[0] === 0xff && (buf[1] & 0xe0) === 0xe0;
-      const flac = buf.subarray(0, 4).toString() === "fLaC";
-      if (!(mp3 && s.type === "mp3") && !(flac && s.type === "flac")) throw new Error(`served ${s.type} but head is ${head}`);
-      return { ...s, ready: `${ready}ms`, bytes: buf.length, total: `${Date.now() - start}ms`, expectSeconds: tr.duration / 1000, kbpsActual: Math.round((buf.length * 8) / (tr.duration)) };
-    });
-  }
+  // FLAC and AAC-LC go to the app as Bilibili's own fragmented MP4, fetched
+  // with the headers the stream gives; HE-AAC comes from ffmpeg as WAV.
+  const play = async (id, quality) => {
+    const start = Date.now();
+    const s = await api.stream({ id, quality });
+    const ready = Date.now() - start;
+    const res = await fetch(s.url, { headers: s.headers || {} });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const buf = Buffer.from(await res.arrayBuffer());
+    const head = buf.subarray(0, 8).toString("hex");
+    const mp4 = buf.subarray(4, 8).toString() === "ftyp";
+    const wav = buf.subarray(0, 4).toString() === "RIFF";
+    if (!(mp4 && s.type === "m4a" && s.headers?.Referer) && !(wav && s.type === "wav")) throw new Error(`gave ${s.type} but head is ${head}`);
+    return { type: s.type, quality: s.quality, bitRate: s.bitRate, host: new URL(s.url).host, ready: `${ready}ms`, bytes: buf.length };
+  };
+  for (const quality of ["high", "standard", "lossless"]) await check(`stream ${quality}`, () => play(tr.id, quality));
+  await check("stream HE-AAC only, through ffmpeg", () => play("BV1vgZrY8Eoo", "high"));
 }
 console.log(failed ? `${failed} failed` : "all passed");
 process.exit(failed ? 1 : 0);

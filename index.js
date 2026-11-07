@@ -1,8 +1,9 @@
 // Bilibili, for personal listening. A video is a track, and a video of many
 // parts is an album with a track for each part. The audio is the video's own
 // soundtrack, which Bilibili serves as AAC (or FLAC, for a few Hi-Res uploads)
-// inside MP4. The app decodes neither from MP4, so ffmpeg turns it into MP3 (or
-// a plain FLAC) and serves it on this machine while it plays.
+// inside fragmented MP4. The app plays that itself, from Bilibili's servers.
+// Only HE-AAC, which some videos have and nothing else, it doesn't decode:
+// ffmpeg decodes that to WAV and serves it on this machine while it plays.
 //
 // Signed out, it searches, plays, and shows charts, parts, comments and
 // subtitles. Signing in with the Bilibili app's QR code adds favorites,
@@ -1109,12 +1110,26 @@ export async function lyrics({ id }) {
 }
 
 // ---------------------------------------------------------------------------
-// Playing: Bilibili's audio, through ffmpeg.
+// Playing: Bilibili's audio, by the app itself, or through ffmpeg for HE-AAC.
 
 let ffmpegPath = null;
 
-// GUI apps don't get the shell's PATH, so Homebrew's places are tried too:
-// the same ones the process permission names.
+// How to get ffmpeg, said for the system the app runs on.
+function installFFmpeg() {
+  switch (host.platform) {
+    case "darwin":
+      return t("This video plays through ffmpeg, which isn't installed. Install it with Homebrew (brew install ffmpeg), then play again.");
+    case "windows":
+      return t("This video plays through ffmpeg, which isn't installed. Install it (in a terminal: winget install Gyan.FFmpeg), then restart MyGo Music.");
+    default:
+      return t("This video plays through ffmpeg, which isn't installed. Install it with your package manager (such as sudo apt install ffmpeg), then play again.");
+  }
+}
+
+// GUI apps don't get the shell's PATH on macOS, so Homebrew's places are tried
+// too: the same ones the process permission names. On Windows and Linux the
+// PATH finds it. No ffmpeg isn't a "setup" error: the app takes those for a
+// setting left empty, and shows "fill these in" in place of what to do.
 async function ffmpeg() {
   if (ffmpegPath) return ffmpegPath;
   for (const path of ["ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) {
@@ -1127,13 +1142,16 @@ async function ffmpeg() {
       if (/allow/i.test(e.message)) throw fail("setup", t("Allow Bilibili to start programs in its settings"));
     }
   }
-  throw fail("setup", t("Bilibili plays through ffmpeg: install it with Homebrew, or so that it's on the PATH"));
+  throw fail("noFFmpeg", installFFmpeg());
 }
 
-// The audio of a part: FLAC when asked for lossless and there is some, else the
-// AAC of the highest bit rate (Dolby left out). Mirrors on mcdn hosts are
+// The audio of a part: FLAC when asked for lossless and there is some; else
+// AAC-LC, the best for High and one of at most about 132 kbps for Standard; else, as
+// the app decodes no HE-AAC, the best there is, for ffmpeg to decode.
+// Dolby is left out. Mirrors on mcdn hosts are
 // peer-to-peer caches that often stall, so the upos ones go first.
-async function audioOf({ bvid, cid }, lossless) {
+async function audioOf({ bvid, cid }, quality) {
+  const lossless = quality === "lossless";
   const params = { bvid, cid, fnval: lossless ? 4048 : 16, fourk: 0, fnver: 0 };
   let d;
   try {
@@ -1149,10 +1167,15 @@ async function audioOf({ bvid, cid }, lossless) {
       .filter(Boolean)
       .sort((x, y) => /mcdn|szbdyd/.test(x) - /mcdn|szbdyd/.test(y));
   const flac = dash.flac?.audio;
-  if (lossless && flac && (flac.baseUrl || flac.base_url)) return { urls: urls(flac), flac: true, bandwidth: flac.bandwidth };
-  const best = (dash.audio || []).reduce((a, b) => (!a || b.bandwidth > a.bandwidth ? b : a), null);
-  if (!best) throw fail("unavailable", t("Bilibili has no audio for this video"));
-  return { urls: urls(best), flac: false, bandwidth: best.bandwidth };
+  if (lossless && flac && (flac.baseUrl || flac.base_url)) return { urls: urls(flac), as: "flac", bandwidth: flac.bandwidth };
+  const all = (dash.audio || []).filter((a) => a.baseUrl || a.base_url).sort((a, b) => b.bandwidth - a.bandwidth);
+  if (!all.length) throw fail("unavailable", t("Bilibili has no audio for this video"));
+  const lc = all.filter((a) => /^mp4a\.40\.2$/i.test(a.codecs || ""));
+  if (lc.length) {
+    const pick = quality === "standard" ? lc.find((a) => a.bandwidth <= 140000) || lc[lc.length - 1] : lc[0];
+    return { urls: urls(pick), as: "m4a", bandwidth: pick.bandwidth };
+  }
+  return { urls: urls(all[0]), as: "he", bandwidth: all[0].bandwidth };
 }
 
 // ffmpeg answers the one request the app makes for the track, as it converts,
@@ -1160,13 +1183,15 @@ async function audioOf({ bvid, cid }, lossless) {
 // time, for tracks skipped before the app asked for them.
 const serving = [];
 
-async function serve(url, { flac, kbps }) {
+// It's decoded to 16-bit WAV: with nothing to encode, ffmpeg gets far ahead
+// of the listener in seconds, and the app seeks in a WAV straight to the byte.
+// MP3 is many times slower to make, and a FLAC that's still being written
+// can't say how long it is, so the app decodes it from the start to seek. An
+// hour of WAV is about 635 MB.
+async function serve(url) {
   const bin = await ffmpeg();
   while (serving.length >= 3) serving.shift().kill();
   const port = 20000 + Math.floor(Math.random() * 40000);
-  const out = flac
-    ? ["-c:a", "copy", "-f", "flac"]
-    : ["-c:a", "libmp3lame", "-b:a", `${kbps}k`, "-id3v2_version", "0", "-write_xing", "0", "-f", "mp3"];
   const proc = host.spawn(bin, [
     "-nostdin", "-hide_banner", "-nostats", "-loglevel", "info",
     "-user_agent", UA,
@@ -1174,7 +1199,8 @@ async function serve(url, { flac, kbps }) {
     "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
     "-rw_timeout", "15000000",
     "-i", url,
-    "-vn", "-map", "0:a:0", ...out,
+    "-vn", "-map", "0:a:0",
+    "-c:a", "pcm_s16le", "-f", "wav",
     "-listen", "1", `http://127.0.0.1:${port}/`,
   ]);
   proc.closeStdin();
@@ -1202,20 +1228,22 @@ async function serve(url, { flac, kbps }) {
   return `http://127.0.0.1:${port}/`;
 }
 
+// The app fetches FLAC and AAC-LC from Bilibili itself, with the headers its
+// servers want. It takes one address, so it gets the first mirror: upos before
+// mcdn, as audioOf put them.
 export async function stream({ id, quality }) {
   const where = await locate(id);
-  const lossless = quality === "lossless";
-  const kbps = quality === "standard" ? 128 : 320;
-  const audio = await audioOf(where, lossless);
+  const tier = quality === "standard" ? "standard" : "high";
+  const audio = await audioOf(where, quality);
+  const headers = { Referer: REFERER, "User-Agent": UA };
+  if (audio.as === "flac") return { url: audio.urls[0], type: "m4a", quality: "lossless", headers };
+  if (audio.as === "m4a") return { url: audio.urls[0], type: "m4a", quality: tier, bitRate: audio.bandwidth, headers };
   let lastError;
   for (const url of audio.urls.slice(0, 3)) {
     try {
-      const served = await serve(url, { flac: audio.flac, kbps });
-      return audio.flac
-        ? { url: served, type: "flac", quality: "lossless" }
-        : { url: served, type: "mp3", quality: kbps === 128 ? "standard" : "high", bitRate: kbps * 1000 };
+      return { url: await serve(url), type: "wav", quality: tier, bitRate: audio.bandwidth };
     } catch (e) {
-      if (e.code === "setup") throw e;
+      if (e.code === "setup" || e.code === "noFFmpeg") throw e;
       lastError = e;
       console.warn(`playing ${id} from ${url.slice(0, 60)}: ${e.message}`);
     }

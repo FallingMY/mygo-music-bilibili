@@ -6,17 +6,20 @@
 
 ## 安装
 
-1. 先装 [ffmpeg](https://ffmpeg.org)。B站音轨是 MP4 封装的 AAC（少数 Hi-Res 稿件是 FLAC），MyGo Music 解不了，插件会调用 ffmpeg 边下边转成 MP3：
+1. 安装插件：点这个链接 [mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili](mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili)，或在「设置 → 插件 → +」里粘贴 `https://github.com/GentleM4dman/mygo-music-bilibili`。
+2. 登录：点登录会打开B站自己的登录页，可以用哔哩哔哩 App 扫码，也可以用短信验证码或密码，手机不在身边也能登。
 
-   ```bash
-   brew install ffmpeg
-   ```
+需要 MyGo Music 0.1.21 及以上：从这个版本起 MyGo 能直接播放 B站的音轨（分片 MP4 里的 AAC 和 FLAC），不用另外装什么。
 
-2. 安装插件：点这个链接 [mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili](mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili)，或在「设置 → 插件 → +」里粘贴 `https://github.com/GentleM4dman/mygo-music-bilibili`。
-3. 在「设置 → 插件」里允许哔哩哔哩启动程序。它只会启动 ffmpeg，位置限定为 PATH、`/opt/homebrew/bin` 或 `/usr/local/bin`。
-4. 登录：点登录会打开B站自己的登录页，可以用哔哩哔哩 App 扫码，也可以用短信验证码或密码，手机不在身边也能登。
+少数视频只有 HE-AAC 音轨，MyGo 还解不了，要靠 [ffmpeg](https://ffmpeg.org) 解码后播放。想听这类视频的话：
 
-需要 MyGo Music 0.1.8 及以上。
+```bash
+brew install ffmpeg            # macOS
+winget install Gyan.FFmpeg     # Windows（在终端里运行，装完重启 MyGo Music）
+sudo apt install ffmpeg        # Debian / Ubuntu，其他发行版用各自的包管理器
+```
+
+再在「设置 → 插件」里允许哔哩哔哩启动程序。它只会启动 ffmpeg，位置限定为 PATH、`/opt/homebrew/bin` 或 `/usr/local/bin`。没装 ffmpeg 时，播到这类视频会提示怎么安装。
 
 ## 能做什么
 
@@ -25,7 +28,7 @@
 
 - **不登录**：搜视频和 UP 主；在搜索框粘贴视频链接、b23.tv 短链、BV 号或 av 号（带 `?p=3` 时那一P排最前）；B站音乐榜（周榜）；音乐区热门；音乐区新鲜投稿（每次打开都不一样）；排行榜页里还有全站排行榜、综合热门和入站必刷；多P视频当专辑，每P一首；单P视频属于合集时，专辑页列出整个合集；UP 主的投稿；评论第一页；「相关推荐」电台。
 - **登录后**：默认收藏夹作为「喜欢」；其他收藏夹和收藏的合集作为歌单，搜索的「歌单」标签会在这些收藏夹里按名字找；往自己的收藏夹里加歌、删歌，新建和重命名收藏夹；历史记录；首页推荐和「首页推荐」电台；关注 UP 主；全部评论、点赞和发评论；视频带有字幕轨时把字幕当歌词（UP 主上传的优先，其次是 B站 AI 字幕；同时有外语和中文字幕时，外语作歌词、中文作翻译）。烧在画面里的字幕提取不了。
-- **音质**：标准是 128 kbps MP3，高是 320 kbps MP3，都由 B站最高码率的 AAC（一般 192 kbps）转码而来。无损会播放 Hi-Res 稿件的 FLAC，需要大会员；拿不到时退回 320 kbps。
+- **音质**：播放的是 B站原始的 AAC，由 MyGo 直接从 B站服务器读取，不重新压缩。高是最高的一档（一般 192 kbps 左右），标准是 132 kbps 左右的一档。无损会播放 Hi-Res 稿件的 FLAC，需要大会员；拿不到时退回高。只有 HE-AAC 音轨的视频由 ffmpeg 解码成 WAV 播放，不再二次有损压缩，拖动进度条也快；代价是缓存较大（一小时约 600 MB）。
 
 ## 登录与隐私
 
@@ -47,13 +50,15 @@ npm run test:signed-in  # 用 MyGo 里已保存的登录只读地试字幕歌词
 
 Plays the audio of Bilibili videos in [MyGo Music](https://github.com/egoist/mygo-music). For personal listening; not affiliated with Bilibili. It uses the website's own API and may stop working when that changes.
 
-**Install** [ffmpeg](https://ffmpeg.org) first (`brew install ffmpeg`). Bilibili serves AAC (or FLAC for a few Hi-Res uploads) inside MP4, which MyGo Music doesn't decode, so ffmpeg converts it to MP3 as it plays. Then install with [mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili](mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili), and in Settings > Plugins allow Bilibili to start programs. It only starts ffmpeg, from the PATH, `/opt/homebrew/bin` or `/usr/local/bin`.
+**Install** with [mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili](mygo-music://install-plugin?repo=GentleM4dman/mygo-music-bilibili). Needs MyGo Music 0.1.21 or later, which plays Bilibili's audio (AAC or FLAC in fragmented MP4) itself, with nothing else to install.
+
+A few videos have only HE-AAC, which MyGo Music doesn't decode yet. Those play through [ffmpeg](https://ffmpeg.org), which decodes them: install it with `brew install ffmpeg` on macOS, `winget install Gyan.FFmpeg` on Windows (then restart MyGo Music), or your package manager on Linux, and in Settings > Plugins allow Bilibili to start programs. It only starts ffmpeg, from the PATH, `/opt/homebrew/bin` or `/usr/local/bin`. Without it, those videos say how to install it.
 
 **Signed out**: search videos and uploaders, paste links (`bilibili.com/video/…`, `b23.tv/…`, BV or av IDs), the weekly Bilibili Music Chart, what's trending and what's new in the music category, and on the Charts page the whole site's ranking, what's popular now and Bilibili's must-see classics, a video's parts (or its collection) as an album, uploaders' videos, the first page of comments, and a station of related videos.
 
 **Signed in** (on Bilibili's own sign-in page, in a window of the app: scan its QR code with the Bilibili app, or use a text message or password): your default favorites folder as Liked, other folders and saved collections as playlists (the Playlists search tab finds them by name), editing your own folders, history, recommendations, following uploaders, all comments, liking and posting comments, and a video's subtitle track as lyrics (the uploader's first, then Bilibili's AI ones; with a foreign-language and a Chinese track, the Chinese is shown as the translation). Subtitles burned into the picture can't be read.
 
-**Quality**: Standard is 128 kbps MP3 and High is 320 kbps MP3, both converted from Bilibili's best AAC. Lossless plays the FLAC of Hi-Res uploads (needs a premium account) and falls back to High.
+**Quality**: Bilibili's own AAC, which MyGo Music reads from Bilibili's servers, not re-encoded: High is its best (usually about 192 kbps), Standard one of about 132 kbps. Lossless plays the FLAC of Hi-Res uploads (needs a premium account) and falls back to High. Videos with only HE-AAC are decoded to WAV by ffmpeg: no second lossy encoding, and quick to seek, but large to cache (about 600 MB an hour).
 
 **Privacy**: the session's cookies are kept unencrypted in the plugin's data on this machine and are only sent to Bilibili. Signing out forgets them here. To end the session on Bilibili's side, log out the device in the Bilibili app.
 
