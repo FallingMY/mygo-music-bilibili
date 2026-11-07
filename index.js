@@ -705,7 +705,58 @@ export async function browse({ page }) {
   if (page === "fresh") {
     return { title: t("New in Music"), subtitle: t("Different each time you look"), sections: [{ tracks: await musicFresh(2) }] };
   }
+  if (page === "following") {
+    needAccount();
+    const [videos, people] = await Promise.all([followingVideos(2), settle(followings())]);
+    const sections = [{ title: t("Latest Videos"), tracks: videos.slice(0, 20), morePage: "following:videos", empty: t("Nothing new from who you follow") }];
+    if (people) sections.push({ title: t("Who You Follow"), artists: people, empty: t("You don't follow anyone yet") });
+    return { title: t("Following"), sections };
+  }
+  if (page === "following:videos") {
+    needAccount();
+    return { title: t("Latest Videos"), subtitle: t("From who you follow, newest first"), sections: [{ tracks: await followingVideos(5) }] };
+  }
   throw fail("unavailable", t("no such page"));
+}
+
+// ---------------------------------------------------------------------------
+// Following: who you follow, and what they put up lately.
+
+// The videos of everyone you follow, newest first, as Bilibili's feed of them
+// gives them: twenty to a page.
+async function followingVideos(pages) {
+  const out = [];
+  const seen = new Set();
+  let offset = "";
+  for (let i = 0; i < pages; i++) {
+    const d = await get("/x/polymer/web-dynamic/v1/feed/all", { type: "video", ...(offset ? { offset } : {}) });
+    for (const it of d?.items || []) {
+      const a = it.modules?.module_dynamic?.major?.archive;
+      const who = it.modules?.module_author;
+      // Videos only their supporters can watch won't play.
+      if (!a?.bvid || seen.has(a.bvid) || /充电/.test(a.badge?.text || "")) continue;
+      seen.add(a.bvid);
+      out.push({ at: Number(who?.pub_ts) || 0, track: track({ bvid: a.bvid, title: a.title, pic: a.cover, mid: who?.mid, author: who?.name, duration: a.duration_text }) });
+    }
+    if (!d?.has_more || !d.offset) break;
+    offset = d.offset;
+  }
+  // A pinned post may come first: newest first all the same.
+  return out.sort((x, y) => y.at - x.at).map((x) => x.track);
+}
+
+// Who you follow, the latest you followed first.
+async function followings() {
+  const out = [];
+  for (let pn = 1; pn <= 5; pn++) {
+    const d = await get("/x/relation/followings", { vmid: myMid(), pn, ps: 50, order: "desc" });
+    for (const u of d?.list || []) {
+      out.push({ id: String(u.mid), name: clean(u.uname), imageUrl: image(u.face, 240) });
+      artistOf(u.mid, u.uname);
+    }
+    if ((d?.list?.length || 0) < 50 || out.length >= (d?.total || 0)) break;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

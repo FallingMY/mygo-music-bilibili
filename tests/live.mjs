@@ -34,6 +34,10 @@ await check("home", async () => (await api.home()).sections.map((s) => [s.title,
 for (const page of ["charts", "chart", "rank", "fresh", "rank:28", "site", "popular", "classics"]) {
   await check(`browse ${page}`, async () => (await api.browse({ page })).sections.map((s) => [s.title, (s.tracks || s.links).length, s.tracks?.[0]?.name]));
 }
+await check("following asks to sign in", async () => {
+  try { await api.browse({ page: "following" }); } catch (e) { if (e.code === "signIn") return e.code; throw e; }
+  throw new Error("answered signed out");
+});
 await check("rankings are current", async () => {
   const { sections } = await api.browse({ page: "rank" });
   const ids = sections[0].tracks.slice(0, 5).map((t) => t.album.id);

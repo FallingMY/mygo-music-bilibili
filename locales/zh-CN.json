@@ -46,5 +46,11 @@
   "Bilibili's picks for newcomers": "B站推荐给新人的经典视频",
   "This video plays through ffmpeg, which is installed but won't start. Reinstall it with Homebrew (brew reinstall ffmpeg), then play again.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请用 Homebrew 重装（brew reinstall ffmpeg），然后重新播放。",
   "This video plays through ffmpeg, which is installed but won't start. Reinstall it, then restart MyGo Music.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请重新安装，然后重启 MyGo Music。",
-  "This video plays through ffmpeg, which is installed but won't start. Reinstall it with your package manager, then play again.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请用系统的包管理器重装，然后重新播放。"
+  "This video plays through ffmpeg, which is installed but won't start. Reinstall it with your package manager, then play again.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请用系统的包管理器重装，然后重新播放。",
+  "Following": "关注",
+  "Latest Videos": "最新投稿",
+  "Who You Follow": "关注的 UP 主",
+  "From who you follow, newest first": "你关注的 UP 主发的视频，新的在前",
+  "Nothing new from who you follow": "你关注的 UP 主最近没有发视频",
+  "You don't follow anyone yet": "你还没有关注任何 UP 主"
 }
