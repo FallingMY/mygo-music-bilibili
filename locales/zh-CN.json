@@ -43,5 +43,8 @@
   "Popular Now": "综合热门",
   "What everyone's watching right now": "大家正在看的视频",
   "Must-See Classics": "入站必刷",
-  "Bilibili's picks for newcomers": "B站推荐给新人的经典视频"
+  "Bilibili's picks for newcomers": "B站推荐给新人的经典视频",
+  "This video plays through ffmpeg, which is installed but won't start. Reinstall it with Homebrew (brew reinstall ffmpeg), then play again.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请用 Homebrew 重装（brew reinstall ffmpeg），然后重新播放。",
+  "This video plays through ffmpeg, which is installed but won't start. Reinstall it, then restart MyGo Music.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请重新安装，然后重启 MyGo Music。",
+  "This video plays through ffmpeg, which is installed but won't start. Reinstall it with your package manager, then play again.": "这个视频需要 ffmpeg 才能播放。这台电脑上装了 ffmpeg，但它启动不了，请用系统的包管理器重装，然后重新播放。"
 }

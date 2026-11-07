@@ -1126,22 +1126,45 @@ function installFFmpeg() {
   }
 }
 
+// An ffmpeg that's there but won't start, often one Homebrew upgraded a
+// library of (dyld: Library not loaded), wants reinstalling, not installing.
+function reinstallFFmpeg(why) {
+  let text;
+  switch (host.platform) {
+    case "darwin":
+      text = t("This video plays through ffmpeg, which is installed but won't start. Reinstall it with Homebrew (brew reinstall ffmpeg), then play again.");
+      break;
+    case "windows":
+      text = t("This video plays through ffmpeg, which is installed but won't start. Reinstall it, then restart MyGo Music.");
+      break;
+    default:
+      text = t("This video plays through ffmpeg, which is installed but won't start. Reinstall it with your package manager, then play again.");
+  }
+  return why ? `${text} (ffmpeg: ${why.length > 160 ? why.slice(0, 160) + "…" : why})` : text;
+}
+
 // GUI apps don't get the shell's PATH on macOS, so Homebrew's places are tried
 // too: the same ones the process permission names. On Windows and Linux the
 // PATH finds it. No ffmpeg isn't a "setup" error: the app takes those for a
-// setting left empty, and shows "fill these in" in place of what to do.
+// setting left empty, and shows "fill these in" in place of what to do. One
+// that isn't there fails to start; one that starts and fails is broken.
 async function ffmpeg() {
   if (ffmpegPath) return ffmpegPath;
+  let broken = null;
   for (const path of ["ffmpeg", "/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg"]) {
+    let proc;
     try {
-      const proc = host.spawn(path, ["-version"]);
-      proc.closeStdin();
-      while ((await proc.readLine()) !== null) {}
-      if ((await proc.wait()) === 0) return (ffmpegPath = path);
+      proc = host.spawn(path, ["-version"]);
     } catch (e) {
       if (/allow/i.test(e.message)) throw fail("setup", t("Allow Bilibili to start programs in its settings"));
+      continue;
     }
+    proc.closeStdin();
+    while ((await proc.readLine()) !== null) {}
+    if ((await proc.wait()) === 0) return (ffmpegPath = path);
+    if (broken === null) broken = (proc.errorOutput() || "").split("\n").map((l) => l.trim()).find(Boolean) || "";
   }
+  if (broken !== null) throw fail("brokenFFmpeg", reinstallFFmpeg(broken));
   throw fail("noFFmpeg", installFFmpeg());
 }
 
@@ -1243,7 +1266,7 @@ export async function stream({ id, quality }) {
     try {
       return { url: await serve(url), type: "wav", quality: tier, bitRate: audio.bandwidth };
     } catch (e) {
-      if (e.code === "setup" || e.code === "noFFmpeg") throw e;
+      if (e.code === "setup" || e.code === "noFFmpeg" || e.code === "brokenFFmpeg") throw e;
       lastError = e;
       console.warn(`playing ${id} from ${url.slice(0, 60)}: ${e.message}`);
     }
