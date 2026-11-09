@@ -764,6 +764,8 @@ async function followings() {
 // artists (uploaders).
 
 async function getAlbum({ id }) {
+  const shelf = /^(season|series):(\d+):(\d+)$/.exec(id);
+  if (shelf) return getShelf(shelf[1], shelf[2], shelf[3]);
   const v = await view(id);
   const owner = artistOf(v.owner?.mid, v.owner?.name);
   const album = {
@@ -799,16 +801,94 @@ async function getAlbum({ id }) {
   return { album, tracks: partsOf(v) };
 }
 
+// An uploader's collections ("season") and series, Bilibili's two kinds of
+// shelf for their videos, as albums. Their ids are "season:<mid>:<id>" and
+// "series:<mid>:<id>". A series that is the same as a collection, by name and
+// count, is left out.
+async function shelves(mid, owner) {
+  const seasons = [];
+  const series = [];
+  for (let page_num = 1; page_num <= 5; page_num++) {
+    const d = await get("/x/polymer/web-space/seasons_series_list", { mid, page_num, page_size: 20 }, { wbi: true });
+    const l = d?.items_lists;
+    seasons.push(...(l?.seasons_list || []).map((s) => s.meta));
+    series.push(...(l?.series_list || []).map((s) => s.meta));
+    if (!l?.page || page_num * l.page.page_size >= l.page.total) break;
+  }
+  const date = (s) => (s ? new Date(s * 1000).toISOString().slice(0, 10) : undefined);
+  const named = new Set(seasons.map((m) => `${clean(m.title || m.name)}|${m.total}`));
+  return [
+    ...seasons.map((m) => ({
+      id: `season:${mid}:${m.season_id}`,
+      name: clean(m.title || m.name),
+      imageUrl: image(m.cover),
+      artists: [owner],
+      released: date(m.ptime),
+    })),
+    ...series
+      .filter((m) => m.total > 0 && !named.has(`${clean(m.name)}|${m.total}`))
+      .map((m) => ({ id: `series:${mid}:${m.series_id}`, name: clean(m.name), imageUrl: image(m.cover), artists: [owner], released: date(m.mtime) })),
+  ];
+}
+
+// A collection or series, in its own order: up to five hundred videos.
+async function getShelf(kind, mid, sid) {
+  const [info, first] = await Promise.all([
+    settle(get("/x/space/wbi/acc/info", { mid }, { wbi: true })),
+    kind === "series" ? settle(get("/x/series/series", { series_id: sid })) : null,
+  ]);
+  const archives = [];
+  let meta = first?.meta;
+  for (let pn = 1; pn <= 5; pn++) {
+    const d =
+      kind === "season"
+        ? await get("/x/polymer/web-space/seasons_archives_list", { mid, season_id: sid, page_num: pn, page_size: 100, sort_reverse: false }, { wbi: true })
+        : await get("/x/series/archives", { mid, series_id: sid, pn, ps: 100, sort: "asc" });
+    if (kind === "season") meta = d?.meta;
+    archives.push(...(d?.archives || []));
+    const total = d?.page?.total ?? 0;
+    if (!d?.archives?.length || archives.length >= total) break;
+  }
+  const name = info?.name || uploaders.get(String(mid)) || "";
+  const owner = artistOf(mid, name);
+  const title = clean(meta?.title || meta?.name) || t("Unknown collection");
+  const album = { id: `${kind}:${mid}:${sid}`, name: title, imageUrl: image(meta?.cover || archives[0]?.pic), artists: [owner] };
+  const tracks = archives.map((a) => {
+    const tr = track({ bvid: a.bvid, title: a.title, pic: a.pic, mid, author: name, duration: a.duration, albumName: title });
+    tr.album.id = album.id;
+    return tr;
+  });
+  if (!tracks.length) throw fail("unavailable", t("This collection is empty"));
+  return { album, tracks };
+}
+
 async function getArtist({ id }) {
+  const page = (pn) => settle(get("/x/space/wbi/arc/search", { mid: id, ps: 50, pn, order: "pubdate" }, { wbi: true }));
   const [info, videos, relation] = await Promise.all([
     settle(get("/x/space/wbi/acc/info", { mid: id }, { wbi: true })),
-    settle(get("/x/space/wbi/arc/search", { mid: id, ps: 40, pn: 1, order: "pubdate" }, { wbi: true })),
+    page(1),
     signedIn() ? settle(get("/x/relation", { fid: id })) : null,
   ]);
-  const name = info?.name || videos?.list?.vlist?.[0]?.author || uploaders.get(String(id)) || "";
-  let tracks = (videos?.list?.vlist || []).map((v) =>
-    track({ bvid: v.bvid, title: v.title, pic: v.pic, mid: id, author: name, duration: v.length }),
-  );
+  // Then the rest of their latest five hundred, three pages at a time, and
+  // their collections. The app can't ask for more as it scrolls yet, and all
+  // of a big uploader's would take long and draw Bilibili's bot checks. A page
+  // turned away ends it with what came.
+  const pages = Math.min(10, Math.ceil((videos?.page?.count || 0) / 50));
+  const shelf = settle(shelves(id, artistOf(id, info?.name || uploaders.get(String(id)))));
+  const vlist = [...(videos?.list?.vlist || [])];
+  for (let pn = 2; pn <= pages; pn += 3) {
+    const got = await Promise.all([pn, pn + 1, pn + 2].filter((n) => n <= pages).map(page));
+    const stop = got.findIndex((d) => !d?.list?.vlist?.length);
+    for (const d of stop < 0 ? got : got.slice(0, stop)) vlist.push(...d.list.vlist);
+    if (stop >= 0) break;
+  }
+  const albums = await shelf;
+  const name = info?.name || vlist[0]?.author || uploaders.get(String(id)) || "";
+  const seen = new Set();
+  let tracks = vlist
+    .filter((v) => v.bvid && !seen.has(v.bvid) && seen.add(v.bvid))
+    .map((v) => track({ bvid: v.bvid, title: v.title, pic: v.pic, mid: id, author: name, duration: v.length }));
+  if (albums && name) for (const a of albums) a.artists = [artistOf(id, name)];
   // The space page often turns away a visitor that isn't signed in. Their
   // videos are still found by searching for their name.
   if (!tracks.length && name) {
@@ -826,6 +906,7 @@ async function getArtist({ id }) {
       following: relation ? [2, 6].includes(relation.attribute) : undefined,
     },
     tracks,
+    albums: albums || [],
   };
 }
 
