@@ -1383,16 +1383,40 @@ async function serve(url) {
   return `http://127.0.0.1:${port}/`;
 }
 
-// The app fetches FLAC and AAC-LC from Bilibili itself, with the headers its
-// servers want. It takes one address, so it gets the first mirror: upos before
-// mcdn, as audioOf put them.
+// MyGo takes one URL. Probe mirrors in preference order before handing off
+// playback, and keep the original URL if the probes cannot pick a winner.
+async function playableMirror(urls, headers) {
+  const candidates = [...new Set(urls)].slice(0, 3);
+  if (candidates.length < 2 || typeof AbortController !== "function") return urls[0];
+  for (const url of candidates) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 3000);
+    try {
+      const res = await fetch(url, {
+        headers: { ...headers, Range: "bytes=0-0" },
+        signal: controller.signal,
+      });
+      if (res.status === 200 || res.status === 206) return url;
+    } catch {
+      // A transport failure or timeout leaves the next mirror to try.
+    } finally {
+      clearTimeout(timer);
+      controller.abort();
+    }
+  }
+  return urls[0];
+}
+
 export async function stream({ id, quality }) {
   const where = await locate(id);
   const tier = quality === "standard" ? "standard" : "high";
   const audio = await audioOf(where, quality);
   const headers = { Referer: REFERER, "User-Agent": UA };
-  if (audio.as === "flac") return { url: audio.urls[0], type: "m4a", quality: "lossless", headers };
-  if (audio.as === "m4a") return { url: audio.urls[0], type: "m4a", quality: tier, bitRate: audio.bandwidth, headers };
+  if (audio.as !== "he") {
+    const url = await playableMirror(audio.urls, headers);
+    if (audio.as === "flac") return { url, type: "m4a", quality: "lossless", headers };
+    return { url, type: "m4a", quality: tier, bitRate: audio.bandwidth, headers };
+  }
   let lastError;
   for (const url of audio.urls.slice(0, 3)) {
     try {
